@@ -1,0 +1,102 @@
+= git-ssh-uplift
+
+`git-ssh-uplift` is a Git https://git-scm.com/docs/git-remote-ext[`ext`] remote helper command that allows a process executing in an _unprivileged context_ to perform authenticated pulls (and pushes) using SSH secrets sourced from a _privileged context_.  This hack was originally implemented to allow processes executing as part of a `docker build` to pull from private source repositories.  In this case, the _unprivileged context_ is an ephemeral Docker container, and the _privileged context_ is the workstation environment from which the build was spawned.
+
+SSH secrets are never exposed to processes in the unprivileged context.
+
+`git-ssh-uplift` may be able to save you from having to vendor a large amount of source code.
+
+This hack is composed of two programs:
+
+* `git-ssh-uplift` is the uplift proxy.  This program executes in the privileged context -- usually your workstation environment -- from which bare `ssh` sessions are known to work.
+* `git-ssh-uplift-shim` is the Git remote helper command.  This program executes in the unprivileged context.  Its job is to forward all Git protocol traffic through to the uplift proxy.
+
+The two programs communicate with one another via TCP sockets.
+
+`git-ssh-uplift` serves a similar purpose to buildkit's https://github.com/moby/buildkit/blob/0b130cca040246d2ddf55117eeff34f546417e40/frontend/dockerfile/docs/experimental.md#run---mounttypessh[`ssh` mount type], but offers more universal support across Docker host platforms.  (As of writing, it seems buildkit is unable to integrate with the agentless passphrase management scheme found on contemporary releases of macOS.)
+
+----
++-----------------------------+                                                   
+|  +-----------------------+  |                                                   
+|  | git clone/pull/fetch  |  |                                                   
+|  +-----------------------+  |                                                   
+|              |              |                                                   
+|              v              | +------------------------+                        
+|  +-----------------------+  | |  +------------------+  |                        
+|  |  git-ssh-uplift-shim  |--+-+->|  git-ssh-uplift  |  |                        
+|  +-----------------------+  | |  +------------------+  |                        
+|                             | |            |           |                        
+|           unpriv            | |            v           |                        
++-----------------------------+ |        +-------+       |    +------------------+
+                                |        |  ssh  |-------+--->| remote git repo  |
+                                |        +-------+       |    +------------------+
+                                |                        |                        
+                                |          priv          |                        
+                                +------------------------+                        
+----
+
+
+== Usage
+
+Suppose you would like to compile a program from source using Docker, and that some subset of the program's source dependencies are stored in one or more private Git repositories.  You do not have these dependencies vendored.  (The dependencies may be resolved as late as at build time.)  You are able to clone these private repositories by invoking `git` on your workstation -- but obviously not from within a container spawned by `docker build`.  Let's fix that.
+
+Language is not significant.  The Go snippets below are used only to compile the uplift proxy and its shim.
+
+First, install the uplift proxy on your workstation.
+
+----
+go get github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift
+----
+
+Next, write your `Dockerfile`.  The `Dockerfile` must do three things:
+
+1. Bundle the `git-ssh-uplift-shim` into your build stage.  The shim is easily built from source.  e.g.:
++
+----
+FROM golang:1-alpine AS shim-builder
+
+RUN apk -v --no-progress --no-cache add --upgrade git
+RUN go get github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift-shim
+
+# shim now available at /go/bin/git-ssh-uplift-shim
+# use 'COPY --from=shim-builder ...' to copy the shim into your later build stages
+----
+
+2. Reconfigure Git to invoke the shim for all transport operations.  e.g.:
++
+----
+# Assumes the shim has been copied to /usr/local/bin/git-ssh-uplift-shim in this build stage.
+RUN git config --global protocol.ext.allow user \
+  && git config --global 'url.ext::/usr/local/bin/git-ssh-uplift-shim %S git github.com .insteadOf' 'https://github.com/'
+----
+
+3. Tell the shim where the uplift proxy is located.  Unfortunately, at the time of writing, there was no particularly neat way to propagate parameters through to an ephemeral build container, so this example will use a fixed port number.  (You may use any port number you like.  Just remember the number.)
++
+----
+# For Go programmers.  The go command will automatically fetch public sources
+# from proxy.golang.org; only private sources will be fetched using the shim.
+RUN UPLIFT_PORT=12345 go mod download
+
+# This works, too.
+RUN UPLIFT_PORT=12345 git clone https://github.com/org/private.git
+----
++
+Any command in your build that fetches from a private repository must be prefixed with `UPLIFT_PORT=...`.
+
+Finally, run `docker build` under the uplift proxy:
+
+----
+# Match this port number with that in your Dockerfile.
+git-ssh-uplift --bind :12345 -- docker build ...
+----
+
+The uplift proxy will begin serving before the build starts, and will cease serving after the build terminates.
+
+Docker for Linux users may need to supply `--network=host` until moby/moby pull #40007 is released.
+
+
+== Security
+
+Any client that is able to reach the uplift proxy will be in a position to invoke SSH sessions on your behalf.  (Clients should be limited to the `git-upload-pack` and `git-receive-pack` commands, however no effort has been expended on thwarting creative attacks on the uplift proxy.)
+
+Data exchanged between the shim and uplift proxy are sent in plaintext.  The shim makes no attempt to verify the identity of the uplift proxy.  It is assumed that these processes are executing on the same physical machine, and as such, the data exchanged between these two contexts are not susceptible to external interference.
