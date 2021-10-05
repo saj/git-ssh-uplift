@@ -45,7 +45,7 @@ Language is not significant.  The Go snippets below are used only to compile the
 First, install the uplift proxy on your workstation.
 
 ----
-go get github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift
+go install github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift@latest
 ----
 
 Next, write your `Dockerfile`.  The `Dockerfile` must do three things:
