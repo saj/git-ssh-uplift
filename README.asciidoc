@@ -56,7 +56,7 @@ Next, write your `Dockerfile`.  The `Dockerfile` must do three things:
 FROM golang:1-alpine AS shim-builder
 
 RUN apk -v --no-progress --no-cache add --upgrade git
-RUN go get github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift-shim
+RUN go install github.com/saj/git-ssh-uplift/cmd/git-ssh-uplift-shim@latest
 
 # shim now available at /go/bin/git-ssh-uplift-shim
 # use 'COPY --from=shim-builder ...' to copy the shim into your later build stages
