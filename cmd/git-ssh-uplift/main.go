@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/gob"
-	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -98,7 +97,6 @@ loop:
 		}
 		go func() {
 			err := proxy(ctx, c)
-			c.Close()
 			<-sem
 			if err != nil {
 				log.Printf("proxy: %s", err)
@@ -108,91 +106,16 @@ loop:
 	return nil
 }
 
-var services = map[proto.GitService]string{
-	proto.GitUploadPack:  "git-upload-pack",
-	proto.GitReceivePack: "git-receive-pack",
-}
-
-func proxy(ctx context.Context, rw io.ReadWriter) error {
+func proxy(ctx context.Context, rw io.ReadWriteCloser) error {
 	hdr := proto.Header{}
-	dec := gob.NewDecoder(rw)
-	if err := dec.Decode(&hdr); err != nil {
+	if err := gob.NewDecoder(rw).Decode(&hdr); err != nil {
 		return fmt.Errorf("bad header: %s", err)
 	}
-	svcName, ok := services[hdr.GitService]
-	if !ok {
-		return fmt.Errorf("bad header: service: %d", hdr.GitService)
-	}
-	if hdr.Hostname == "" {
-		return errors.New("bad header: missing hostname")
-	}
-	uh := hdr.Hostname
-	if hdr.Username != "" {
-		uh = hdr.Username + "@" + hdr.Hostname
-	}
-	repo := hdr.RepositoryPath
-	if repo == "" {
-		repo = "."
-	}
-
-	args := []string{"ssh", "-x", uh, fmt.Sprintf(`%s '%s'`, svcName, repo)}
-	return execProcCopyStdio(procSpec{args: args}, rw)
-}
-
-type procSpec struct {
-	args []string // first element is program name
-	attr *os.ProcAttr
-}
-
-func execProcCopyStdio(ps procSpec, rw io.ReadWriter) error {
-
-	// Cmd.Wait() would ordinarily wait for stdin to hit EOF.  In our case, the
-	// subprocess stdin is attached to a network socket that remains open after
-	// the subprocess terminates.  Cmd.Wait() deadlocks.
-
-	qname, err := exec.LookPath(ps.args[0])
+	args, err := sshProcArgs(hdr)
 	if err != nil {
 		return err
 	}
-
-	ir, iw, err := os.Pipe()
-	if err != nil {
-		return err
-	}
-	defer ir.Close()
-	defer iw.Close()
-
-	or, ow, err := os.Pipe()
-	if err != nil {
-		return err
-	}
-	defer or.Close()
-	defer ow.Close()
-
-	if ps.attr == nil {
-		ps.attr = &os.ProcAttr{}
-	}
-	ps.attr.Files = []*os.File{ir, ow, os.Stderr}
-
-	proc, err := os.StartProcess(qname, ps.args, ps.attr)
-	if err != nil {
-		return err
-	}
-
-	eg := &errgroup.Group{}
-	eg.Go(func() error {
-		state, err := proc.Wait()
-		if err != nil {
-			return err
-		}
-		if !state.Success() {
-			return fmt.Errorf("%s exited with code %d", ps.args[0], state.ExitCode())
-		}
-		return nil
-	})
-	eg.Go(func() error { _, err := io.Copy(rw, or); return err })
-	eg.Go(func() error { _, err := io.Copy(iw, rw); return err })
-	return eg.Wait()
+	return args.ExecPiped(ctx, rw)
 }
 
 func isClosed(err error) bool {

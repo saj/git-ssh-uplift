@@ -76,13 +76,7 @@ func proxy(hdr proto.Header, rw io.ReadWriter) error {
 
 func copyStdio(rw io.ReadWriter) error {
 	eg := errgroup.Group{}
-	eg.Go(func() error {
-		_, err := io.Copy(rw, os.Stdin)
-		return err
-	})
-	eg.Go(func() error {
-		_, err := io.Copy(os.Stdout, rw)
-		return err
-	})
+	eg.Go(func() error { _, err := io.Copy(rw, os.Stdin); return err })
+	eg.Go(func() error { _, err := io.Copy(os.Stdout, rw); return err })
 	return eg.Wait()
 }
