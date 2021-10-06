@@ -3,11 +3,11 @@ package main
 import (
 	"context"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
-	"strings"
 
 	"github.com/saj/git-ssh-uplift/internal/proto"
 )
@@ -50,16 +50,15 @@ loop:
 	for {
 		lim.Acquire()
 		conn, err := lis.Accept()
-		if isClosed(err) {
+		if errors.Is(err, net.ErrClosed) {
 			break loop
 		}
 		if err != nil {
 			return err
 		}
 		go func(conn net.Conn) {
-			err := proxy(ctx, conn)
-			lim.Done()
-			if err != nil {
+			defer lim.Done()
+			if err := proxy(ctx, conn); err != nil {
 				log.Printf("proxy: %s", err)
 			}
 		}(conn)
@@ -77,13 +76,4 @@ func proxy(ctx context.Context, rw io.ReadWriteCloser) error {
 		return err
 	}
 	return args.ExecPiped(ctx, rw)
-}
-
-func isClosed(err error) bool {
-	// go bug 4373
-	opError, ok := err.(*net.OpError)
-	if !ok {
-		return false
-	}
-	return strings.Contains(opError.Error(), "closed")
 }
