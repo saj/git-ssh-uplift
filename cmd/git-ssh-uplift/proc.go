@@ -66,3 +66,14 @@ func (a procArgs) ExecPiped(ctx context.Context, rw io.ReadWriteCloser) error {
 	eg.Go(func() error { return cmd.Wait() })
 	return eg.Wait()
 }
+
+func (a procArgs) ExecUplifted(ctx context.Context, port int) error {
+	env := os.Environ()
+	env = append(env, fmt.Sprintf("SSH_UPLIFT_PORT=%d", port))
+	cmd := exec.CommandContext(ctx, a[0], a[1:]...)
+	cmd.Env = env
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
