@@ -92,8 +92,6 @@ git-ssh-uplift --bind :12345 -- docker build ...
 
 The uplift proxy will begin serving before the build starts, and will cease serving after the build terminates.
 
-Docker for Linux users may need to supply `--network=host` until moby/moby pull #40007 is released.
-
 
 == Security
 
