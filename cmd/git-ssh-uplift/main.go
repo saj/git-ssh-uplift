@@ -32,14 +32,27 @@ explicitly interrupted (with SIGINT or SIGTERM).
 
 type Cmd struct {
 	Args     []string    `kong:"arg,optional"`
-	Bind     BindAddress `kong:"default='0.0.0.0:',placeholder='[host]:[port]',help='Bind the uplift proxy to a particular local address and/or TCP port.  host defaults to all addresses.  port is randomly chosen if omitted.'"`
+	Bind     BindAddress `kong:"default=':',placeholder='[host]:[port]',help='Bind the uplift proxy to a particular local address and/or TCP port.  host defaults to all addresses on Linux, or 127.0.0.1 on other operating systems.  port is randomly chosen if omitted.'"`
 	ConnsMax uint        `kong:"default='10',help='Limit the maximum number of concurrent connections to the proxy (if value is positive).'"`
 }
 
 type BindAddress net.TCPAddr
 
+var defaultBindAddressString = defaultBindAddress.String()
+
 func (f *BindAddress) UnmarshalText(text []byte) error {
-	addr, err := net.ResolveTCPAddr("tcp", string(text))
+	s := string(text)
+
+	// Defer to explicit user preference -- even if 0.0.0.0 or [::].
+	host, port, err := net.SplitHostPort(s)
+	if err != nil {
+		return err
+	}
+	if host == "" {
+		host = defaultBindAddress.String()
+	}
+
+	addr, err := net.ResolveTCPAddr("tcp", host+":"+port)
 	if err != nil {
 		return err
 	}
