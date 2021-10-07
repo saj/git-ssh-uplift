@@ -49,7 +49,7 @@ func (f *BindAddress) UnmarshalText(text []byte) error {
 		return err
 	}
 	if host == "" {
-		host = defaultBindAddress.String()
+		host = defaultBindAddressString
 	}
 
 	addr, err := net.ResolveTCPAddr("tcp", host+":"+port)
